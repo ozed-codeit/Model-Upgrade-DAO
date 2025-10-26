@@ -292,3 +292,133 @@
         (ok true)
     )
 )
+
+;; Extended public functions
+(define-public (add-proposal-comment (proposal-id uint) (comment (string-ascii 500)))
+    (let
+        (
+            (proposal (unwrap! (get-proposal proposal-id) err-not-found))
+            (comment-count (get-proposal-comment-count proposal-id))
+            (new-comment-id (+ (get count comment-count) u1))
+        )
+        (map-set proposal-comments
+            { proposal-id: proposal-id, comment-id: new-comment-id }
+            { commenter: tx-sender, comment: comment, timestamp: stacks-block-height }
+        )
+        (map-set proposal-comment-count
+            { proposal-id: proposal-id }
+            { count: new-comment-id }
+        )
+        (ok new-comment-id)
+    )
+)
+
+(define-public (create-delegation (delegate principal) (amount uint))
+    (let
+        (
+            (current-stake (unwrap! (get-user-stake tx-sender) err-insufficient-stake))
+        )
+        (asserts! (>= (get total-staked current-stake) amount) err-insufficient-stake)
+        (map-set delegations
+            { delegator: tx-sender, delegate: delegate }
+            { amount: amount, active: true }
+        )
+        (ok true)
+    )
+)
+
+(define-public (revoke-delegation (delegate principal))
+    (let
+        (
+            (delegation (unwrap! (get-delegation tx-sender delegate) err-not-found))
+        )
+        (map-set delegations
+            { delegator: tx-sender, delegate: delegate }
+            { amount: (get amount delegation), active: false }
+        )
+        (ok true)
+    )
+)
+
+(define-public (add-milestone (proposal-id uint) (milestone-id uint) (description (string-ascii 200)) (reward uint))
+    (let
+        (
+            (proposal (unwrap! (get-proposal proposal-id) err-not-found))
+        )
+        (asserts! (is-eq tx-sender (get proposer proposal)) err-owner-only)
+        (map-set proposal-milestones
+            { proposal-id: proposal-id, milestone-id: milestone-id }
+            { description: description, completed: false, reward: reward }
+        )
+        (ok true)
+    )
+)
+
+(define-public (complete-milestone (proposal-id uint) (milestone-id uint))
+    (let
+        (
+            (proposal (unwrap! (get-proposal proposal-id) err-not-found))
+            (milestone (unwrap! (get-proposal-milestone proposal-id milestone-id) err-not-found))
+        )
+        (asserts! (is-eq tx-sender (get proposer proposal)) err-owner-only)
+        (asserts! (not (get completed milestone)) err-proposal-closed)
+        (map-set proposal-milestones
+            { proposal-id: proposal-id, milestone-id: milestone-id }
+            (merge milestone { completed: true })
+        )
+        (try! (as-contract (stx-transfer? (get reward milestone) tx-sender (get proposer proposal))))
+        (ok true)
+    )
+)
+
+(define-public (update-reputation (user principal) (score-change uint) (increment bool))
+    (let
+        (
+            (current-rep (get-user-reputation user))
+        )
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (map-set user-reputation
+            { user: user }
+            {
+                score: (if increment (+ (get score current-rep) score-change) (- (get score current-rep) score-change)),
+                proposals-created: (get proposals-created current-rep),
+                votes-cast: (get votes-cast current-rep)
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-public (increment-proposal-count (user principal))
+    (let
+        (
+            (current-rep (get-user-reputation user))
+        )
+        (map-set user-reputation
+            { user: user }
+            {
+                score: (get score current-rep),
+                proposals-created: (+ (get proposals-created current-rep) u1),
+                votes-cast: (get votes-cast current-rep)
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-public (increment-vote-count (user principal))
+    (let
+        (
+            (current-rep (get-user-reputation user))
+        )
+        (map-set user-reputation
+            { user: user }
+            {
+                score: (get score current-rep),
+                proposals-created: (get proposals-created current-rep),
+                votes-cast: (+ (get votes-cast current-rep) u1)
+            }
+        )
+        (ok true)
+    )
+)
