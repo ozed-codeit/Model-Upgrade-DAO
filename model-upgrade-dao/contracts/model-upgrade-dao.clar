@@ -62,3 +62,84 @@
     { proposal-id: uint, milestone-id: uint }
     { description: (string-ascii 200), completed: bool, reward: uint }
 )
+
+;; Read-only functions
+(define-read-only (get-proposal (proposal-id uint))
+    (map-get? proposals { proposal-id: proposal-id })
+)
+
+(define-read-only (get-vote (proposal-id uint) (voter principal))
+    (map-get? votes { proposal-id: proposal-id, voter: voter })
+)
+
+(define-read-only (get-user-stake (user principal))
+    (map-get? user-stakes { user: user })
+)
+
+(define-read-only (get-min-stake)
+    (ok (var-get min-stake))
+)
+
+;; Extended read-only functions
+(define-read-only (get-proposal-comment (proposal-id uint) (comment-id uint))
+    (map-get? proposal-comments { proposal-id: proposal-id, comment-id: comment-id })
+)
+
+(define-read-only (get-proposal-comment-count (proposal-id uint))
+    (default-to { count: u0 } (map-get? proposal-comment-count { proposal-id: proposal-id }))
+)
+
+(define-read-only (get-delegation (delegator principal) (delegate principal))
+    (map-get? delegations { delegator: delegator, delegate: delegate })
+)
+
+(define-read-only (get-user-reputation (user principal))
+    (default-to { score: u0, proposals-created: u0, votes-cast: u0 } 
+        (map-get? user-reputation { user: user }))
+)
+
+(define-read-only (get-proposal-milestone (proposal-id uint) (milestone-id uint))
+    (map-get? proposal-milestones { proposal-id: proposal-id, milestone-id: milestone-id })
+)
+
+(define-read-only (calculate-voting-power (user principal))
+    (let
+        (
+            (stake (default-to { total-staked: u0 } (get-user-stake user)))
+            (reputation (get-user-reputation user))
+        )
+        (ok (+ (get total-staked stake) (get score reputation)))
+    )
+)
+
+(define-read-only (get-proposal-status (proposal-id uint))
+    (let
+        (
+            (proposal (unwrap! (get-proposal proposal-id) err-not-found))
+        )
+        (ok {
+            status: (get status proposal),
+            votes-for: (get votes-for proposal),
+            votes-against: (get votes-against proposal),
+            total-votes: (+ (get votes-for proposal) (get votes-against proposal))
+        })
+    )
+)
+
+;; Helper functions
+(define-private (is-proposal-active (proposal-id uint))
+    (match (get-proposal proposal-id)
+        proposal (is-eq (get status proposal) "active")
+        false
+    )
+)
+
+(define-private (calculate-quorum (proposal-id uint))
+    (let
+        (
+            (proposal (unwrap-panic (get-proposal proposal-id)))
+            (total-votes (+ (get votes-for proposal) (get votes-against proposal)))
+        )
+        (> total-votes (var-get min-stake))
+    )
+)
