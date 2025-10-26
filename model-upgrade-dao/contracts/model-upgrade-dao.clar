@@ -143,3 +143,152 @@
         (> total-votes (var-get min-stake))
     )
 )
+
+;; Public functions
+(define-public (create-proposal (title (string-ascii 100)) (stake-amount uint))
+    (let
+        (
+            (new-proposal-id (+ (var-get proposal-nonce) u1))
+        )
+        (asserts! (>= stake-amount (var-get min-stake)) err-insufficient-stake)
+        (try! (stx-transfer? stake-amount tx-sender (as-contract tx-sender)))
+        (map-set proposals
+            { proposal-id: new-proposal-id }
+            {
+                proposer: tx-sender,
+                title: title,
+                stake-amount: stake-amount,
+                votes-for: u0,
+                votes-against: u0,
+                status: "active",
+                created-at: stacks-block-height
+            }
+        )
+        (var-set proposal-nonce new-proposal-id)
+        (ok new-proposal-id)
+    )
+)
+
+(define-public (vote-proposal (proposal-id uint) (vote-for bool) (vote-amount uint))
+    (let
+        (
+            (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found))
+        )
+        (asserts! (is-none (map-get? votes { proposal-id: proposal-id, voter: tx-sender })) err-already-voted)
+        (asserts! (is-eq (get status proposal) "active") err-proposal-closed)
+        (try! (stx-transfer? vote-amount tx-sender (as-contract tx-sender)))
+        (map-set votes
+            { proposal-id: proposal-id, voter: tx-sender }
+            { vote-amount: vote-amount, vote-type: vote-for }
+        )
+        (map-set proposals
+            { proposal-id: proposal-id }
+            (merge proposal {
+                votes-for: (if vote-for (+ (get votes-for proposal) vote-amount) (get votes-for proposal)),
+                votes-against: (if vote-for (get votes-against proposal) (+ (get votes-against proposal) vote-amount))
+            })
+        )
+        (ok true)
+    )
+)
+
+(define-public (finalize-proposal (proposal-id uint))
+    (let
+        (
+            (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found))
+        )
+        (asserts! (is-eq (get status proposal) "active") err-proposal-closed)
+        (map-set proposals
+            { proposal-id: proposal-id }
+            (merge proposal {
+                status: (if (> (get votes-for proposal) (get votes-against proposal)) "approved" "rejected")
+            })
+        )
+        (ok true)
+    )
+)
+
+(define-public (withdraw-stake (proposal-id uint))
+    (let
+        (
+            (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found))
+            (voter-info (unwrap! (map-get? votes { proposal-id: proposal-id, voter: tx-sender }) err-not-found))
+        )
+        (asserts! (or (is-eq (get status proposal) "approved") (is-eq (get status proposal) "rejected")) err-proposal-closed)
+        (try! (as-contract (stx-transfer? (get vote-amount voter-info) tx-sender tx-sender)))
+        (map-delete votes { proposal-id: proposal-id, voter: tx-sender })
+        (ok true)
+    )
+)
+
+(define-public (delegate-vote (delegate-to principal) (amount uint))
+    (let
+        (
+            (current-stake (default-to { total-staked: u0 } (get-user-stake tx-sender)))
+            (delegate-stake (default-to { total-staked: u0 } (get-user-stake delegate-to)))
+        )
+        (asserts! (>= (get total-staked current-stake) amount) err-insufficient-stake)
+        (map-set user-stakes
+            { user: tx-sender }
+            { total-staked: (- (get total-staked current-stake) amount) }
+        )
+        (map-set user-stakes
+            { user: delegate-to }
+            { total-staked: (+ (get total-staked delegate-stake) amount) }
+        )
+        (ok true)
+    )
+)
+
+(define-public (cancel-proposal (proposal-id uint))
+    (let
+        (
+            (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) err-not-found))
+        )
+        (asserts! (is-eq tx-sender (get proposer proposal)) err-owner-only)
+        (asserts! (is-eq (get status proposal) "active") err-proposal-closed)
+        (map-set proposals
+            { proposal-id: proposal-id }
+            (merge proposal { status: "cancelled" })
+        )
+        (try! (as-contract (stx-transfer? (get stake-amount proposal) tx-sender (get proposer proposal))))
+        (ok true)
+    )
+)
+
+(define-public (update-min-stake (new-min-stake uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (var-set min-stake new-min-stake)
+        (ok true)
+    )
+)
+
+(define-public (stake-tokens (amount uint))
+    (let
+        (
+            (current-stake (default-to { total-staked: u0 } (get-user-stake tx-sender)))
+        )
+        (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+        (map-set user-stakes
+            { user: tx-sender }
+            { total-staked: (+ (get total-staked current-stake) amount) }
+        )
+        (ok true)
+    )
+)
+
+(define-public (unstake-tokens (amount uint))
+    (let
+        (
+            (current-stake (unwrap! (get-user-stake tx-sender) err-not-found))
+        )
+        (asserts! (>= (get total-staked current-stake) amount) err-insufficient-stake)
+        (try! (as-contract (stx-transfer? amount tx-sender tx-sender)))
+        (map-set user-stakes
+            { user: tx-sender }
+            { total-staked: (- (get total-staked current-stake) amount) }
+        )
+        (ok true)
+    )
+)
